@@ -1,0 +1,87 @@
+# Monitor wolnych miejsc w USOSweb, uruchamiany za darmo na GitHub Actions.
+#
+# Gdzie to wrzucic w repozytorium:
+#     .github/workflows/usos-miejsca.yml     <- ten plik
+#     usos_miejsca.py                        <- skrypt, w glownym katalogu repo
+#
+# Co ustawic przed pierwszym uruchomieniem (Settings -> Secrets and variables
+# -> Actions -> New repository secret):
+#     NTFY_TOPIC   - wymyslona przez ciebie nazwa tematu ntfy, np. konrad-usos-7f3a
+#                    (w apce ntfy na telefonie subskrybujesz dokladnie ten temat)
+# Opcjonalnie zamiast ntfy albo obok:
+#     TELEGRAM_TOKEN, TELEGRAM_CHAT
+#
+# Potem: zakladka Actions -> "Monitor miejsc USOS" -> "Run workflow", zeby
+# sprawdzic, czy dziala, nie czekajac na harmonogram.
+
+name: Monitor miejsc USOS
+
+on:
+  schedule:
+    # co 5 minut - to najkrotszy odstep, na jaki pozwala GitHub.
+    # Uwaga: GitHub czesto odpala harmonogram z opoznieniem (bywa 5-20 minut),
+    # wiec to nie jest snajperska precyzja. Do lapania zwolnionego miejsca
+    # w trakcie tury i tak zwykle wystarcza.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:        # pozwala odpalic recznie przyciskiem
+
+# Gdyby poprzednie uruchomienie jeszcze trwalo, nie kolejkuj kolejnych.
+concurrency:
+  group: usos-miejsca
+  cancel-in-progress: false
+
+jobs:
+  sprawdz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Pobierz repo
+        uses: actions/checkout@v4
+
+      # Pamiec miedzy uruchomieniami: dzieki temu skrypt wie, ile miejsc bylo
+      # ostatnio, i alarmuje dopiero przy ZMIANIE, zamiast co 5 minut.
+      - name: Przywroc zapamietany stan
+        uses: actions/cache/restore@v4
+        with:
+          path: usos_miejsca_state.json
+          key: usos-state-${{ github.run_id }}
+          restore-keys: |
+            usos-state-
+
+      - name: Sprawdz miejsca
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+        run: |
+          set -euo pipefail
+
+          ARGS=(
+            --course "04IST0-25S103O03096G"   # <- kod twojego przedmiotu
+            --lecturer "Komarnicki"           # <- nazwisko prowadzacego
+            --once
+            --no-desktop                      # na serwerze nie ma pulpitu
+            --state usos_miejsca_state.json
+          )
+
+          if [ -n "${NTFY_TOPIC:-}" ]; then
+            ARGS+=(--ntfy "$NTFY_TOPIC")
+          fi
+          if [ -n "${TELEGRAM_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT:-}" ]; then
+            ARGS+=(--telegram-token "$TELEGRAM_TOKEN" --telegram-chat "$TELEGRAM_CHAT")
+          fi
+
+          # Gdyby cache kiedys wyparowal, przelacz sie na tryb bezstanowy,
+          # dopisujac tutaj:  --alert-when-free
+          # (wtedy dostajesz powiadomienie przy KAZDYM sprawdzeniu, w ktorym
+          #  jest wolne miejsce - upierdliwe, ale nic nie przegapisz)
+
+          python3 usos_miejsca.py "${ARGS[@]}"
+
+      - name: Zapisz stan na nastepny raz
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: usos_miejsca_state.json
+          key: usos-state-${{ github.run_id }}
